@@ -1,0 +1,179 @@
+import pygame
+import random
+
+# --- Game Constants ---
+SCREEN_WIDTH = 600
+SCREEN_HEIGHT = 400
+GRID_SIZE = 20
+GRID_WIDTH = SCREEN_WIDTH // GRID_SIZE
+GRID_HEIGHT = SCREEN_HEIGHT // GRID_SIZE
+
+# Colors (RGB)
+WHITE = (255, 255, 255)
+GREEN = (0, 255, 0)
+RED = (255, 0, 0)
+BLACK = (0, 0, 0)
+
+# Directions
+UP = (0, -1)
+DOWN = (0, 1)
+LEFT = (-1, 0)
+RIGHT = (1, 0)
+
+# --- Snake Class ---
+class Snake:
+    def __init__(self):
+        # Initial position of the snake (center of the screen)
+        self.body = [(GRID_WIDTH // 2, GRID_HEIGHT // 2)]
+        self.direction = RIGHT  # Initial direction
+        self.grow = False       # Flag to check if snake should grow
+
+    def move(self):
+        # Get the current head position
+        head_x, head_y = self.body[0]
+        # Calculate new head position based on direction
+        new_head = (head_x + self.direction[0], head_y + self.direction[1])
+        
+        # Add the new head to the beginning of the body
+        self.body.insert(0, new_head)
+
+        # If the snake is not growing, remove the tail segment
+        if not self.grow:
+            self.body.pop()
+        else:
+            self.grow = False # Reset grow flag after growing
+
+    def change_direction(self, new_dir):
+        # Prevent immediate 180-degree turns (e.g., cannot go left if currently going right)
+        if (new_dir[0] * -1, new_dir[1] * -1) != self.direction:
+            self.direction = new_dir
+
+    def eat_food(self):
+        self.grow = True
+
+    def check_collision(self):
+        head_x, head_y = self.body[0]
+
+        # Wall collision
+        if not (0 <= head_x < GRID_WIDTH and 0 <= head_y < GRID_HEIGHT):
+            return True # Collision with wall
+
+        # Self-collision (check if head collides with any part of the body, excluding itself)
+        if self.body[0] in self.body[1:]:
+            return True # Collision with self
+
+        return False
+
+    def draw(self, surface):
+        for segment in self.body:
+            # Draw each segment as a rectangle
+            rect = pygame.Rect(segment[0] * GRID_SIZE, segment[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+            pygame.draw.rect(surface, GREEN, rect)
+            # Add a small border for better visibility
+            pygame.draw.rect(surface, BLACK, rect, 1)
+
+# --- Food Class ---
+class Food:
+    def __init__(self):
+        self.position = (0, 0) # Placeholder
+        self.spawn()
+
+    def spawn(self, snake_body=None):
+        # Generate a random position for the food
+        while True:
+            x = random.randint(0, GRID_WIDTH - 1)
+            y = random.randint(0, GRID_HEIGHT - 1)
+            new_pos = (x, y)
+            # Ensure food does not spawn on the snake's body
+            if snake_body is None or new_pos not in snake_body:
+                self.position = new_pos
+                break
+
+    def draw(self, surface):
+        # Draw food as a red square
+        rect = pygame.Rect(self.position[0] * GRID_SIZE, self.position[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+        pygame.draw.rect(surface, RED, rect)
+
+# --- Game Function ---
+def run_game():
+    pygame.init() # Initialize all the Pygame modules
+
+    # Set up the display surface (window)
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("Snake Game")
+
+    # Create game objects
+    snake = Snake()
+    food = Food()
+    food.spawn(snake.body) # Spawn initial food, avoiding snake's starting position
+
+    clock = pygame.time.Clock() # To control game speed
+    game_over = False
+    score = 0
+
+    # Font for displaying score
+    font = pygame.font.Font(None, 36) # Default font, size 36
+
+    # --- Game Loop ---
+    while not game_over:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                game_over = True
+            elif event.type == pygame.KEYDOWN:
+                # Keyboard controls for testing
+                if event.key == pygame.K_UP:
+                    snake.change_direction(UP)
+                elif event.key == pygame.K_DOWN:
+                    snake.change_direction(DOWN)
+                elif event.key == pygame.K_LEFT:
+                    snake.change_direction(LEFT)
+                elif event.key == pygame.K_RIGHT:
+                    snake.change_direction(RIGHT)
+
+        # Game logic updates
+        snake.move()
+
+        # Check for collisions
+        if snake.check_collision():
+            game_over = True
+
+        # Check if snake ate food
+        if snake.body[0] == food.position:
+            snake.eat_food()
+            score += 1
+            food.spawn(snake.body) # Spawn new food, avoiding snake's current body
+
+        # Drawing
+        screen.fill(BLACK) # Clear the screen with black
+        snake.draw(screen) # Draw the snake
+        food.draw(screen)  # Draw the food
+
+        # Display score
+        score_text = font.render(f"Score: {score}", True, WHITE)
+        screen.blit(score_text, (5, 5)) # Position the score text
+
+        pygame.display.flip() # Update the full display Surface to the screen
+
+        # Control game speed (frames per second)
+        clock.tick(10) # Snake moves 10 segments per second
+
+    # --- Game Over Screen ---
+    game_over_font = pygame.font.Font(None, 72)
+    game_over_text = game_over_font.render("GAME OVER!", True, WHITE)
+    score_final_text = font.render(f"Final Score: {score}", True, WHITE)
+
+    # Center the text
+    game_over_rect = game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 30))
+    score_final_rect = score_final_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20))
+
+    screen.blit(game_over_text, game_over_rect)
+    screen.blit(score_final_text, score_final_rect)
+    pygame.display.flip()
+
+    # Keep the game over screen visible for a few seconds
+    pygame.time.wait(3000)
+
+    pygame.quit() # Uninitialize Pygame modules
+
+if __name__ == "__main__":
+    run_game()

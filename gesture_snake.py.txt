@@ -1,0 +1,289 @@
+import pygame
+import random
+import cv2
+import mediapipe as mp
+import math
+
+# --- Game Constants ---
+SCREEN_WIDTH = 600
+SCREEN_HEIGHT = 400
+GRID_SIZE = 20
+GRID_WIDTH = SCREEN_WIDTH // GRID_SIZE
+GRID_HEIGHT = SCREEN_HEIGHT // GRID_SIZE
+
+# Colors (RGB)
+WHITE = (255, 255, 255)
+GREEN = (0, 255, 0)
+RED = (255, 0, 0)
+BLACK = (0, 0, 0)
+BLUE = (0, 0, 255) # For webcam overlay text
+
+# Directions
+UP = (0, -1)
+DOWN = (0, 1)
+LEFT = (-1, 0)
+RIGHT = (1, 0)
+
+# --- Hand Gesture Control Parameters ---
+# Threshold for detecting significant hand movement
+# A higher value means you need to move your hand more for a direction change.
+HAND_MOVEMENT_THRESHOLD = 0.03 # Relative to screen size (e.g., 3% of width/height)
+# Cooldown period (in frames) after a direction change to prevent rapid, unintended changes
+DIRECTION_CHANGE_COOLDOWN = 5
+
+# --- Snake Class ---
+class Snake:
+    def __init__(self):
+        self.body = [(GRID_WIDTH // 2, GRID_HEIGHT // 2)]
+        self.direction = RIGHT
+        self.grow = False
+        self.score = 0
+
+    def move(self):
+        head_x, head_y = self.body[0]
+        new_head = (head_x + self.direction[0], head_y + self.direction[1])
+        
+        self.body.insert(0, new_head)
+
+        if not self.grow:
+            self.body.pop()
+        else:
+            self.grow = False
+
+    def change_direction(self, new_dir):
+        # Prevent immediate 180-degree turns
+        if (new_dir[0] * -1, new_dir[1] * -1) != self.direction:
+            self.direction = new_dir
+
+    def eat_food(self):
+        self.grow = True
+        self.score += 1
+
+    def check_collision(self):
+        head_x, head_y = self.body[0]
+
+        # Wall collision
+        if not (0 <= head_x < GRID_WIDTH and 0 <= head_y < GRID_HEIGHT):
+            return True
+
+        # Self-collision
+        if self.body[0] in self.body[1:]:
+            return True
+
+        return False
+
+    def draw(self, surface):
+        for segment in self.body:
+            rect = pygame.Rect(segment[0] * GRID_SIZE, segment[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+            pygame.draw.rect(surface, GREEN, rect)
+            pygame.draw.rect(surface, BLACK, rect, 1)
+
+# --- Food Class ---
+class Food:
+    def __init__(self):
+        self.position = (0, 0)
+        self.spawn()
+
+    def spawn(self, snake_body=None):
+        while True:
+            x = random.randint(0, GRID_WIDTH - 1)
+            y = random.randint(0, GRID_HEIGHT - 1)
+            new_pos = (x, y)
+            if snake_body is None or new_pos not in snake_body:
+                self.position = new_pos
+                break
+
+    def draw(self, surface):
+        rect = pygame.Rect(self.position[0] * GRID_SIZE, self.position[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+        pygame.draw.rect(surface, RED, rect)
+
+# --- Main Game Function ---
+def run_gesture_snake():
+    pygame.init()
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("Hand Gesture Snake Game")
+
+    # Initialize MediaPipe Hands
+    mp_hands = mp.solutions.hands
+    hands = mp_hands.Hands(static_image_mode=False,
+                           max_num_hands=1,
+                           min_detection_confidence=0.7, # Increased confidence for better stability
+                           min_tracking_confidence=0.7)
+    mp_drawing = mp.solutions.drawing_utils
+
+    # Open webcam
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open webcam. Please ensure it's connected and not in use.")
+        pygame.quit()
+        return
+
+    font_pygame = pygame.font.Font(None, 36) # Font for Pygame score display
+    font_cv = cv2.FONT_HERSHEY_SIMPLEX # Font for OpenCV webcam overlay
+
+    # Outer loop for restarting the game
+    running = True
+    while running:
+        snake = Snake() # Reset snake for new game
+        food = Food()   # Reset food for new game
+        food.spawn(snake.body)
+
+        clock = pygame.time.Clock()
+        game_over = False
+
+        # Variables for hand tracking and gesture control
+        prev_wrist_x, prev_wrist_y = None, None
+        direction_cooldown_counter = 0
+
+        # --- Game Loop ---
+        while not game_over:
+            # --- 1. Handle Pygame Events ---
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    game_over = True
+                    running = False # Set running to False to exit outer loop as well
+                # For debugging or alternative control, you can keep keyboard controls
+                # elif event.type == pygame.KEYDOWN:
+                #     if event.key == pygame.K_UP: snake.change_direction(UP)
+                #     elif event.key == pygame.K_DOWN: snake.change_direction(DOWN)
+                #     elif event.key == pygame.K_LEFT: snake.change_direction(LEFT)
+                #     elif event.key == pygame.K_RIGHT: snake.change_direction(RIGHT)
+
+            # --- 2. Process Webcam Feed for Hand Gestures ---
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab webcam frame.")
+                game_over = True # End current game if webcam fails
+                running = False  # Exit application if webcam fails
+                break
+
+            frame = cv2.flip(frame, 1) # Flip for mirror effect
+            frame_height, frame_width, _ = frame.shape
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb_frame)
+
+            current_wrist_x, current_wrist_y = None, None
+            
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    # Draw hand landmarks on the OpenCV frame
+                    mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+                    # Get wrist landmark (index 0) coordinates
+                    wrist_landmark = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
+                    # Convert normalized coordinates (0 to 1) to pixel coordinates
+                    current_wrist_x = int(wrist_landmark.x * frame_width)
+                    current_wrist_y = int(wrist_landmark.y * frame_height)
+
+                    # Draw a circle at the wrist for visual feedback
+                    cv2.circle(frame, (current_wrist_x, current_wrist_y), 10, BLUE, -1)
+                    
+                    # --- Gesture Detection Logic ---
+                    if prev_wrist_x is not None and prev_wrist_y is not None and direction_cooldown_counter == 0:
+                        dx = current_wrist_x - prev_wrist_x
+                        dy = current_wrist_y - prev_wrist_y
+
+                        # Normalize movement by frame size for consistent thresholding
+                        normalized_dx = dx / frame_width
+                        normalized_dy = dy / frame_height # Corrected: should be frame_height
+
+                        # Check for significant movement
+                        if abs(normalized_dx) > HAND_MOVEMENT_THRESHOLD or abs(normalized_dy) > HAND_MOVEMENT_THRESHOLD:
+                            if abs(normalized_dx) > abs(normalized_dy): # Horizontal movement is dominant
+                                if normalized_dx < -HAND_MOVEMENT_THRESHOLD: # Moved left
+                                    snake.change_direction(LEFT)
+                                    direction_cooldown_counter = DIRECTION_CHANGE_COOLDOWN
+                                elif normalized_dx > HAND_MOVEMENT_THRESHOLD: # Moved right
+                                    snake.change_direction(RIGHT)
+                                    direction_cooldown_counter = DIRECTION_CHANGE_COOLDOWN
+                            else: # Vertical movement is dominant
+                                if normalized_dy < -HAND_MOVEMENT_THRESHOLD: # Moved up
+                                    snake.change_direction(UP)
+                                    direction_cooldown_counter = DIRECTION_CHANGE_COOLDOWN
+                                elif normalized_dy > HAND_MOVEMENT_THRESHOLD: # Moved down
+                                    snake.change_direction(DOWN)
+                                    direction_cooldown_counter = DIRECTION_CHANGE_COOLDOWN
+                    
+                    # Update previous wrist position for the next frame
+                    prev_wrist_x, prev_wrist_y = current_wrist_x, current_wrist_y
+            else:
+                # Reset prev_wrist_x, prev_wrist_y if hand is not detected
+                prev_wrist_x, prev_wrist_y = None, None
+                
+            # Decrement cooldown counter
+            if direction_cooldown_counter > 0:
+                direction_cooldown_counter -= 1
+
+            # Display instructions and current direction on webcam feed
+            cv2.putText(frame, "Move hand to control snake", (10, 30), font_cv, 0.7, BLUE, 2, cv2.LINE_AA)
+            current_dir_text = f"Direction: {snake.direction}"
+            cv2.putText(frame, current_dir_text, (10, 60), font_cv, 0.7, BLUE, 2, cv2.LINE_AA)
+            cv2.imshow('Webcam Feed (Hand Tracking)', frame) # Show webcam feed
+
+            # --- 3. Game Logic Updates ---
+            snake.move()
+
+            if snake.check_collision():
+                game_over = True
+
+            if snake.body[0] == food.position:
+                snake.eat_food()
+                food.spawn(snake.body)
+
+            # --- 4. Drawing on Pygame Screen ---
+            screen.fill(BLACK)
+            snake.draw(screen)
+            food.draw(screen)
+
+            # Display score
+            score_text = font_pygame.render(f"Score: {snake.score}", True, WHITE)
+            screen.blit(score_text, (5, 5))
+
+            pygame.display.flip()
+            
+            # Control game speed (adjust this value to make snake faster/slower)
+            # Slower frame rate makes gesture control easier to manage
+            clock.tick(8) # Slower than before to allow more time for gesture detection
+
+        # --- Game Over Screen ---
+        # Ensure the screen is updated with game over message before waiting for input
+        screen.fill(BLACK) # Clear the screen
+        game_over_font = pygame.font.Font(None, 72)
+        game_over_text = game_over_font.render("GAME OVER!", True, WHITE)
+        score_final_text = font_pygame.render(f"Final Score: {snake.score}", True, WHITE)
+        restart_text = font_pygame.render("Press 'R' to Restart or 'Q' to Quit", True, WHITE)
+        click_prompt_text = font_pygame.render("Click this window, then press 'R'", True, WHITE) # New instruction
+
+        game_over_rect = game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 50))
+        score_final_rect = score_final_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 ))
+        restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 50))
+        click_prompt_rect = click_prompt_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 90)) # Position new instruction
+
+        screen.blit(game_over_text, game_over_rect)
+        screen.blit(score_final_text, score_final_rect)
+        screen.blit(restart_text, restart_rect)
+        screen.blit(click_prompt_text, click_prompt_rect) # Draw new instruction
+        pygame.display.flip()
+
+        # Wait for user input to restart or quit
+        waiting_for_input = True
+        while waiting_for_input:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                    waiting_for_input = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_r: # Press 'R' to restart
+                        waiting_for_input = False
+                    elif event.key == pygame.K_q: # Press 'Q' to quit
+                        running = False
+                        waiting_for_input = False
+            clock.tick(10) # Keep refreshing to catch events
+
+    # --- Cleanup ---
+    cap.release() # Release the webcam
+    cv2.destroyAllWindows() # Close OpenCV windows
+    pygame.quit() # Uninitialize Pygame
+
+if __name__ == "__main__":
+    run_gesture_snake()
